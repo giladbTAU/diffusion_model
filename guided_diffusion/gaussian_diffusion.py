@@ -10,6 +10,8 @@ import math
 
 import numpy as np
 import torch as th
+import torchvision as tv
+import matplotlib.pyplot as plt
 
 from .nn import mean_flat
 from .losses import normal_kl, discretized_gaussian_log_likelihood
@@ -323,6 +325,7 @@ class GaussianDiffusion:
             "variance": model_variance,
             "log_variance": model_log_variance,
             "pred_xstart": pred_xstart,
+            "eps": model_output, 
         }
 
     def _predict_xstart_from_eps(self, x_t, t, eps):
@@ -362,10 +365,26 @@ class GaussianDiffusion:
 
         This uses the conditioning strategy from Sohl-Dickstein et al. (2015).
         """
-        gradient = cond_fn(x, self._scale_timesteps(t), **model_kwargs)
+        # print("condition_mean: x.shape:", x.shape)
+        # print("condition_mean: x.min:", x.min())
+        # print("condition_mean: x.max:", x.max())   
+        cond_fn_inputs = [x, p_mean_var["eps"], self.sqrt_recip_alphas_cumprod, self.sqrt_recipm1_alphas_cumprod]
+        gradient = cond_fn(cond_fn_inputs, self._scale_timesteps(t), **model_kwargs)
+        # print("condition_mean: gradient.shape:", gradient.shape)
+
         new_mean = (
             p_mean_var["mean"].float() + p_mean_var["variance"] * gradient.float()
         )
+        print("YYYYYYYYYYYYYYYYYYY")
+        print("condition_mean: p_mean_var[mean].float().max():", p_mean_var["mean"].float().max())
+        print("condition_mean: p_mean_var[variance].max():", p_mean_var["variance"].max())
+        print("condition_mean: gradient.float().max():", gradient.float().max())
+        print("condition_mean: p_mean_var[mean].float().min():", p_mean_var["mean"].float().min())
+        print("condition_mean: p_mean_var[variance].min():", p_mean_var["variance"].min())
+        print("condition_mean: gradient.float().min():", gradient.float().min())        
+        print("YYYYYYYYYYYYYYYYYYY")
+
+        print("condition_mean: new_mean.shape:", new_mean.shape)
         return new_mean
 
     def condition_score(self, cond_fn, p_mean_var, x, t, model_kwargs=None):
@@ -436,6 +455,10 @@ class GaussianDiffusion:
                 cond_fn, out, x, t, model_kwargs=model_kwargs
             )
         sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise
+        print("p_sample: sample.shape", sample.shape)  # Amer and Gilad
+        print("p_sample: sample.min", sample.min())  # Amer and Gilad
+        print("p_sample: sample.max", sample.max())  # Amer and Gilad
+        
         return {"sample": sample, "pred_xstart": out["pred_xstart"]}
 
     def p_sample_loop(
@@ -470,7 +493,9 @@ class GaussianDiffusion:
         :return: a non-differentiable batch of samples.
         """
         final = None
-        for sample in self.p_sample_loop_progressive(
+        series = []
+        img_series = []
+        for sample, final_series, noise_out, img in self.p_sample_loop_progressive(
             model,
             shape,
             noise=noise,
@@ -481,8 +506,11 @@ class GaussianDiffusion:
             device=device,
             progress=progress,
         ):
-            final = sample
-        return final["sample"]
+            final = sample  # final is a Dictionary
+
+            print("p_sample_loop: final[sample].shape;", final["sample"].shape)
+
+        return final["sample"], final_series, noise_out, img_series
 
     def p_sample_loop_progressive(
         self,
@@ -511,16 +539,23 @@ class GaussianDiffusion:
             img = noise
         else:
             img = th.randn(*shape, device=device)
+            noise_out = img
+            print("p_sample_loop_progressive: img.shape: ", img.shape)
         indices = list(range(self.num_timesteps))[::-1]
+        print("p_sample_loop_progressive: indices: ", indices)
+        # p_sample_loop_progressive: indices:  [999, 998, 997, 996, 995, 994, 993, .... 0]
 
         if progress:
             # Lazy import so that we don't depend on tqdm.
             from tqdm.auto import tqdm
 
             indices = tqdm(indices)
-
+        series = []
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
+            print("p_sample_loop_progressive: t=", t, "i=", i, "shape[0]=", shape[0])  # Amer and Gilad
+            # p_sample_loop_progressive: t= tensor([921, 921, 921, 921], device='cuda:0') i= 921 shape[0]= 4
+            # shape[0] - batch size
             with th.no_grad():
                 out = self.p_sample(
                     model,
@@ -531,8 +566,11 @@ class GaussianDiffusion:
                     cond_fn=cond_fn,
                     model_kwargs=model_kwargs,
                 )
-                yield out
+                yield out, series, noise_out, img
                 img = out["sample"]
+                # if (i < 1000):
+                #   if (i % 100 == 0) : 
+                #     tv.utils.save_image(0.5*img[:,0,:,:]+ 0.5, f"/content/gdrive/MyDrive/Project/Output_Dir/Logs/model_10000_image_{i:03d}.png")
 
     def ddim_sample(
         self,

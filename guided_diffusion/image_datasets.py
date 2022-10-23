@@ -6,6 +6,7 @@ import blobfile as bf
 from mpi4py import MPI
 import numpy as np
 from torch.utils.data import DataLoader, Dataset
+import scipy.io
 
 
 def load_data(
@@ -16,7 +17,7 @@ def load_data(
     class_cond=False,
     deterministic=False,
     random_crop=False,
-    random_flip=True,
+    random_flip=False,
 ):
     """
     For a dataset, create a generator over (images, kwargs) pairs.
@@ -46,7 +47,8 @@ def load_data(
         class_names = [bf.basename(path).split("_")[0] for path in all_files]
         sorted_classes = {x: i for i, x in enumerate(sorted(set(class_names)))}
         classes = [sorted_classes[x] for x in class_names]
-    dataset = ImageDataset(
+    dataset = MatDataset( #Amer and Gilad - changed from ImageDataset
+    # dataset = ImageDataset( #Amer and Gilad - changed from ImageDataset
         image_size,
         all_files,
         classes=classes,
@@ -72,11 +74,63 @@ def _list_image_files_recursively(data_dir):
     for entry in sorted(bf.listdir(data_dir)):
         full_path = bf.join(data_dir, entry)
         ext = entry.split(".")[-1]
-        if "." in entry and ext.lower() in ["jpg", "jpeg", "png", "gif"]:
+        if "." in entry and ext.lower() in ["jpg", "jpeg", "png", "gif", "mat"]:
             results.append(full_path)
         elif bf.isdir(full_path):
             results.extend(_list_image_files_recursively(full_path))
     return results
+
+class MatDataset(Dataset):
+    def __init__(
+        self,
+        resolution,
+        image_paths,
+        classes=None,
+        shard=0,
+        num_shards=1,
+        random_crop=False,
+        random_flip=False,
+    ):
+        super().__init__()
+        # self.resolution = resolution
+        self.local_images = image_paths[shard:][::num_shards]
+        # self.local_classes = None if classes is None else classes[shard:][::num_shards]
+        # self.random_crop = random_crop
+        self.random_flip = random_flip
+
+    def __len__(self):
+        return len(self.local_images)
+
+    def __getitem__(self, idx):
+        path = self.local_images[idx]
+        # with bf.BlobFile(path, "rb") as f:
+        mat = scipy.io.loadmat(path)
+        mat = mat['worm_m_cropped']
+        mat_flipped = np.flip(mat,0)          
+        # pil_image = Image.open(f)
+        # pil_image.load()
+        # pil_image = pil_image.convert("RGB")
+
+        # if self.random_crop:
+        #     arr = random_crop_arr(pil_image, self.resolution)
+        # else:
+              # arr = center_crop_arr(mat_flipped, self.resolution)
+        arr = mat_flipped
+        # if self.random_flip and random.random() < 0.5:
+        #     arr = arr[:, ::-1]
+
+        # arr = arr.astype(np.float32) / 127.5 - 1  # changing values from [0:255] to be [-1:1]
+        arr = arr.astype(np.float32) * 2.0 - 1 #changing values from [0:1] to [-1:1]
+        arr = arr[np.newaxis,:,:]
+        arr_zeros = np.zeros((1,arr.shape[1], arr.shape[2])) # 1x256x156
+        arr_zeros = arr_zeros.astype(np.float32)
+        arr = np.concatenate((arr, arr_zeros, arr_zeros), axis = 0) #Amer and Gilad - chaneging to 3 dims to comply with the previous code 
+        # arr = np.repeat(arr[np.newaxis,:,:], 3, axis=0) #Amer and Gilad - chaneging to 3 dims to comply with the previous code 
+        out_dict = {}
+        # if self.local_classes is not None:
+        #     out_dict["y"] = np.array(self.local_classes[idx], dtype=np.int64)
+        # return np.transpose(arr, [2, 0, 1]), out_dict
+        return arr, out_dict
 
 
 class ImageDataset(Dataset):
@@ -116,7 +170,7 @@ class ImageDataset(Dataset):
             arr = arr[:, ::-1]
 
         arr = arr.astype(np.float32) / 127.5 - 1
-
+        print("xxxxxxxxxxxx", arr.shape)
         out_dict = {}
         if self.local_classes is not None:
             out_dict["y"] = np.array(self.local_classes[idx], dtype=np.int64)

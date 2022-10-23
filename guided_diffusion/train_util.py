@@ -303,7 +303,10 @@ def find_resume_checkpoint():
       if (temp>maximum):
         maximum=temp;
     checkpoint_path = glob.glob(os.path.join(path,'model*'+str(maximum)+'.pt'),recursive=True)
-    return checkpoint_path[0]
+    #return checkpoint_path[0]
+
+    return None
+
     #os.path.join(path,"model0"+str(maximum)+".pt")
 
 
